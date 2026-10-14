@@ -282,6 +282,119 @@ namespace SimulateKeyboardInput
             SendBatch(batch);
         }
 
+        public static bool SendTextWithInterval(string text, int intervalMilliseconds, Func<bool> cancellationRequested)
+        {
+            return ForEachCharacterWithInterval(text, intervalMilliseconds, cancellationRequested,
+                delegate(char first, char second, int codeUnitCount)
+            {
+                List<NativeInput> inputs = new List<NativeInput>(4);
+                if (first == '\r')
+                {
+                    AddKeyPair(inputs, VkReturn, 0, 0);
+                }
+                else if (first == '\t')
+                {
+                    AddKeyPair(inputs, VkTab, 0, 0);
+                }
+                else
+                {
+                    for (int i = 0; i < codeUnitCount; i++)
+                    {
+                        char current = i == 0 ? first : second;
+                        AddKeyPair(inputs, 0, current, KeyEventUnicode);
+                    }
+                }
+
+                SendBatch(inputs);
+            },
+                delegate(int milliseconds) { Thread.Sleep(milliseconds); });
+        }
+
+        private static bool ForEachCharacterWithInterval(string text, int intervalMilliseconds,
+            Func<bool> cancellationRequested, Action<char, char, int> emitCharacter, Action<int> wait)
+        {
+            if (intervalMilliseconds < 1 || intervalMilliseconds > 1000)
+                throw new ArgumentOutOfRangeException("intervalMilliseconds", "The character interval must be between 1 and 1000 milliseconds.");
+            if (cancellationRequested == null)
+                cancellationRequested = delegate { return false; };
+            if (emitCharacter == null)
+                throw new ArgumentNullException("emitCharacter");
+            if (wait == null)
+                throw new ArgumentNullException("wait");
+
+            int sentCharacters = 0;
+            return ForEachCharacter(text, delegate(char first, char second, int codeUnitCount)
+            {
+                if (cancellationRequested())
+                    return false;
+                if (sentCharacters > 0)
+                {
+                    wait(intervalMilliseconds);
+                    if (cancellationRequested())
+                        return false;
+                }
+
+                emitCharacter(first, second, codeUnitCount);
+                sentCharacters++;
+                return true;
+            });
+        }
+
+        private static void AddKeyPair(List<NativeInput> inputs, ushort virtualKey, ushort scanCode, uint flags)
+        {
+            inputs.Add(CreateInput(virtualKey, scanCode, flags));
+            inputs.Add(CreateInput(virtualKey, scanCode, flags | KeyEventKeyUp));
+        }
+
+        private static bool ForEachCharacter(string text, Func<char, char, int, bool> emit)
+        {
+            if (text == null)
+                throw new ArgumentNullException("text");
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                char current = text[i];
+                if (current == '\r')
+                {
+                    if (i + 1 < text.Length && text[i + 1] == '\n')
+                        i++;
+                    if (!emit('\r', '\0', 1))
+                        return false;
+                }
+                else if (current == '\n')
+                {
+                    if (!emit('\r', '\0', 1))
+                        return false;
+                }
+                else if (current == '\t')
+                {
+                    if (!emit('\t', '\0', 1))
+                        return false;
+                }
+                else if (Char.IsHighSurrogate(current) && i + 1 < text.Length && Char.IsLowSurrogate(text[i + 1]))
+                {
+                    if (!emit(current, text[++i], 2))
+                        return false;
+                }
+                else if (!emit(current, '\0', 1))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static int CountLogicalCharacters(string text)
+        {
+            int count = 0;
+            ForEachCharacter(text, delegate(char first, char second, int codeUnitCount)
+            {
+                count++;
+                return true;
+            });
+            return count;
+        }
+
         private static void ForEachKey(string text, Action<ushort, ushort, uint> emit)
         {
             if (text == null)
@@ -365,6 +478,31 @@ namespace SimulateKeyboardInput
             Assert(unicodeStrokes.Count == 8, "UTF-16 surrogate pairs must be preserved.");
             AssertKey(unicodeStrokes, 1, 0, 0xD83D, KeyEventUnicode);
             AssertKey(unicodeStrokes, 2, 0, 0xDE00, KeyEventUnicode);
+            Assert(CountLogicalCharacters("A\tB\r\nC\nD\rE") == 9,
+                "Tabs and line endings must each count as one delayed character.");
+            Assert(CountLogicalCharacters("A" + supplementaryCharacter + "Z") == 3,
+                "A surrogate pair must count as one delayed character.");
+            int emittedCharacters = 0;
+            List<int> requestedIntervals = new List<int>();
+            bool intervalSendCompleted = ForEachCharacterWithInterval("A" + supplementaryCharacter + "B", 25,
+                delegate { return false; },
+                delegate(char first, char second, int codeUnitCount) { emittedCharacters++; },
+                delegate(int milliseconds) { requestedIntervals.Add(milliseconds); });
+            Assert(intervalSendCompleted && emittedCharacters == 3 && requestedIntervals.Count == 2 &&
+                requestedIntervals[0] == 25 && requestedIntervals[1] == 25,
+                "The configured delay must run exactly once between logical characters, not after the final character.");
+            Assert(!SendTextWithInterval("A", 1, delegate { return true; }),
+                "A cancellation request must stop before sending the first character.");
+            bool invalidIntervalRejected = false;
+            try
+            {
+                SendTextWithInterval("", 0, null);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                invalidIntervalRejected = true;
+            }
+            Assert(invalidIntervalRejected, "Character intervals outside 1-1000 ms must be rejected.");
 
             string sample = "\u6587\u672c\t\u503c\r\n";
             Assert(DecodeBytes(Encoding.UTF8.GetBytes(sample)) == sample, "BOM-less UTF-8 decoding failed.");
@@ -396,7 +534,7 @@ namespace SimulateKeyboardInput
                     File.Delete(temporarySettings);
             }
 
-            return "Self-test passed: native INPUT size, text decoding, Unicode, tabs, line endings, and shortcut persistence.";
+            return "Self-test passed: native INPUT size, text decoding, Unicode, tabs, line endings, shortcut persistence, and character interval handling.";
         }
 
         private static byte[] WithBom(Encoding encoding, string text)
@@ -556,9 +694,13 @@ namespace SimulateKeyboardInput
         private readonly TextBox _pathBox;
         private readonly Label _hotkeyValueLabel;
         private readonly Label _statusLabel;
+        private readonly CheckBox _intervalCheckBox;
+        private readonly NumericUpDown _intervalMillisecondsInput;
         private string _selectedPath;
         private ShortcutConfiguration _shortcut;
         private bool _hotkeyRegistered;
+        private bool _isSending;
+        private volatile bool _cancelSending;
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool RegisterHotKey(IntPtr windowHandle, int id, uint modifiers, uint virtualKey);
@@ -573,7 +715,7 @@ namespace SimulateKeyboardInput
         {
             _shortcut = ShortcutConfiguration.Load();
             Text = "\u6587\u4ef6\u8f6c\u952e\u76d8\u8f93\u5165";
-            ClientSize = new Size(540, 200);
+            ClientSize = new Size(540, 225);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -612,15 +754,37 @@ namespace SimulateKeyboardInput
             changeShortcutButton.Size = new Size(115, 27);
             changeShortcutButton.Click += ChangeShortcut;
 
+            _intervalCheckBox = new CheckBox();
+            _intervalCheckBox.AutoSize = true;
+            _intervalCheckBox.Location = new Point(20, 101);
+            _intervalCheckBox.Text = "\u6309\u5b57\u7b26\u95f4\u9694\u8f93\u51fa";
+
+            _intervalMillisecondsInput = new NumericUpDown();
+            _intervalMillisecondsInput.Location = new Point(165, 98);
+            _intervalMillisecondsInput.Size = new Size(65, 24);
+            _intervalMillisecondsInput.Minimum = 1;
+            _intervalMillisecondsInput.Maximum = 1000;
+            _intervalMillisecondsInput.Value = 50;
+            _intervalMillisecondsInput.Enabled = false;
+            _intervalCheckBox.CheckedChanged += delegate
+            {
+                _intervalMillisecondsInput.Enabled = _intervalCheckBox.Checked;
+            };
+
+            Label intervalUnitLabel = new Label();
+            intervalUnitLabel.AutoSize = true;
+            intervalUnitLabel.Location = new Point(238, 102);
+            intervalUnitLabel.Text = "\u6beb\u79d2 / \u5b57\u7b26\uff081\u20131000\uff09";
+
             Label instructions = new Label();
             instructions.AutoSize = false;
-            instructions.Location = new Point(20, 105);
+            instructions.Location = new Point(20, 137);
             instructions.Size = new Size(500, 40);
             instructions.Text = "\u5148\u9009\u62e9\u6587\u672c\u6587\u4ef6\uff0c\u518d\u5207\u6362\u5230\u76ee\u6807\u8f93\u5165\u4f4d\u7f6e\uff0c\u7136\u540e\u6309\u5feb\u6377\u952e\u3002";
 
             _statusLabel = new Label();
             _statusLabel.AutoSize = false;
-            _statusLabel.Location = new Point(20, 160);
+            _statusLabel.Location = new Point(20, 190);
             _statusLabel.Size = new Size(500, 24);
             _statusLabel.Text = "\u7b49\u5f85\u9009\u62e9\u6587\u4ef6";
 
@@ -630,8 +794,12 @@ namespace SimulateKeyboardInput
             Controls.Add(hotkeyLabel);
             Controls.Add(_hotkeyValueLabel);
             Controls.Add(changeShortcutButton);
+            Controls.Add(_intervalCheckBox);
+            Controls.Add(_intervalMillisecondsInput);
+            Controls.Add(intervalUnitLabel);
             Controls.Add(instructions);
             Controls.Add(_statusLabel);
+            FormClosing += delegate { _cancelSending = true; };
         }
 
         public static void Run()
@@ -762,6 +930,11 @@ namespace SimulateKeyboardInput
         {
             if (!_hotkeyRegistered)
                 return;
+            if (_isSending)
+            {
+                SetStatus("\u6b63\u5728\u9010\u5b57\u7b26\u8f93\u5165\uff0c\u8bf7\u7a0d\u5019\u3002");
+                return;
+            }
             if (String.IsNullOrEmpty(_selectedPath))
             {
                 SetStatus("\u8bf7\u5148\u9009\u62e9\u6587\u672c\u6587\u4ef6\u3002");
@@ -793,13 +966,69 @@ namespace SimulateKeyboardInput
 
             try
             {
-                KeyboardInput.SendText(text);
-                SetStatus("\u8f93\u5165\u5b8c\u6210\u3002");
+                if (_intervalCheckBox.Checked)
+                    StartIntervalSend(text, (int)_intervalMillisecondsInput.Value);
+                else
+                {
+                    KeyboardInput.SendText(text);
+                    SetStatus("\u8f93\u5165\u5b8c\u6210\u3002");
+                }
             }
             catch (Exception ex)
             {
                 SetStatus("\u8f93\u5165\u5931\u8d25\uff1a" + ex.Message);
             }
+        }
+
+        private void StartIntervalSend(string text, int intervalMilliseconds)
+        {
+            _isSending = true;
+            _cancelSending = false;
+            Thread worker = new Thread(delegate()
+            {
+                string finalStatus;
+                try
+                {
+                    bool completed = KeyboardInput.SendTextWithInterval(text, intervalMilliseconds,
+                        delegate { return _cancelSending; });
+                    finalStatus = completed ? "\u8f93\u5165\u5b8c\u6210\u3002" : "\u8f93\u5165\u5df2\u53d6\u6d88\u3002";
+                }
+                catch (Exception ex)
+                {
+                    finalStatus = "\u8f93\u5165\u5931\u8d25\uff1a" + ex.Message;
+                }
+
+                if (!IsDisposed && IsHandleCreated)
+                {
+                    try
+                    {
+                        BeginInvoke(new MethodInvoker(delegate
+                        {
+                            _isSending = false;
+                            SetStatus(finalStatus);
+                        }));
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // The form may be disposed while the background sender exits.
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // The form may be closing while the background sender exits.
+                    }
+                }
+            });
+            worker.IsBackground = true;
+            try
+            {
+                worker.Start();
+            }
+            catch
+            {
+                _isSending = false;
+                throw;
+            }
+            SetStatus("\u6b63\u5728\u9010\u5b57\u7b26\u8f93\u5165\u2026");
         }
 
         private bool WaitForHotkeyRelease()
