@@ -1336,13 +1336,16 @@ namespace SimulateKeyboardInput
             KeyCaptureTextBox.RunCaptureSelfTests();
             using (ManualOperationPanel panel = new ManualOperationPanel())
             {
-                panel.SetShortcutText("Ctrl+Alt+I");
-                panel.RunShortcutChangeSelfTest();
+                panel.RunFooterLayoutSelfTest();
                 panel.RunCaptureIntegrationSelfTest();
             }
             using (KeyboardForm form = new KeyboardForm())
-                Assert(form.Controls.Count == 1, "The source tabs were not initialized.");
-            return "Self-test passed: nested JSON persistence, key-chord parsing, loop limits, cancellation, UI construction, control-key capture/display, and shortcut editing entry point.";
+            {
+                Assert(form.Controls.Count == 2, "The shared header and source tabs were not initialized.");
+                form.RunSharedChromeSelfTest();
+                form.RunStatusRoutingSelfTest();
+            }
+            return "Self-test passed: nested JSON persistence, key-chord parsing, loop limits, cancellation, control-key capture/display, aligned status actions, shared page chrome, and page-specific status routing.";
         }
 
         private static void Assert(bool condition, string message)
@@ -1477,21 +1480,46 @@ namespace SimulateKeyboardInput
         }
     }
 
+    public static class UiChrome
+    {
+        public static Panel CreatePageHeading(string title, string description)
+        {
+            Panel heading = new Panel();
+            heading.Dock = DockStyle.Top;
+            heading.Height = 58;
+            heading.BackColor = SystemColors.Control;
+
+            Label titleLabel = new Label();
+            titleLabel.AutoSize = true;
+            titleLabel.Location = new Point(18, 7);
+            titleLabel.Font = new Font(SystemFonts.MessageBoxFont.FontFamily, 12.0F, FontStyle.Bold);
+            titleLabel.Text = title;
+
+            Label descriptionLabel = new Label();
+            descriptionLabel.AutoSize = true;
+            descriptionLabel.Location = new Point(18, 34);
+            descriptionLabel.ForeColor = SystemColors.GrayText;
+            descriptionLabel.Text = description;
+
+            heading.Controls.Add(titleLabel);
+            heading.Controls.Add(descriptionLabel);
+            return heading;
+        }
+    }
+
     public sealed class ManualOperationPanel : UserControl
     {
         private readonly TreeView _tree;
         private readonly Panel _propertiesPanel;
         private readonly Label _statusLabel;
-        private readonly Label _shortcutLabel;
-        private readonly Button _changeShortcutButton;
         private readonly Button _stopButton;
         private readonly Label _selectionLabel;
+        private readonly TableLayoutPanel _footer;
         private string _currentPath;
         private bool _dirty;
         private bool _loadingProperties;
 
         public event EventHandler StopRequested;
-        public event EventHandler ShortcutChangeRequested;
 
         public ManualOperationPanel()
         {
@@ -1500,10 +1528,11 @@ namespace SimulateKeyboardInput
 
             FlowLayoutPanel toolbar = new FlowLayoutPanel();
             toolbar.Dock = DockStyle.Top;
-            toolbar.Height = 70;
-            toolbar.Padding = new Padding(6);
+            toolbar.Height = 58;
+            toolbar.Padding = new Padding(12, 10, 12, 8);
             toolbar.WrapContents = true;
             toolbar.AutoSize = false;
+            toolbar.BackColor = SystemColors.Control;
 
             AddToolbarButton(toolbar, "\u65b0\u5efa", NewProgram);
             AddToolbarButton(toolbar, "\u6253\u5f00 JSON", OpenProgram);
@@ -1549,34 +1578,29 @@ namespace SimulateKeyboardInput
             _selectionLabel.Text = "\u8f93\u5165\u79ef\u6728";
             split.Panel2.Controls.Add(_selectionLabel);
 
-            Panel footer = new Panel();
-            footer.Dock = DockStyle.Bottom;
-            footer.Height = 62;
-            footer.Width = 1000;
-            footer.BorderStyle = BorderStyle.FixedSingle;
+            _footer = new TableLayoutPanel();
+            _footer.Dock = DockStyle.Bottom;
+            _footer.Height = 48;
+            _footer.ColumnCount = 2;
+            _footer.RowCount = 1;
+            _footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            _footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            _footer.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            _footer.Padding = new Padding(12, 0, 12, 0);
+            _footer.BorderStyle = BorderStyle.FixedSingle;
+            _footer.BackColor = SystemColors.Control;
 
             _statusLabel = new Label();
-            _statusLabel.Location = new Point(10, 7);
-            _statusLabel.Size = new Size(850, 21);
-            _statusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            _statusLabel.Dock = DockStyle.Fill;
+            _statusLabel.TextAlign = ContentAlignment.MiddleLeft;
+            _statusLabel.AutoEllipsis = true;
             _statusLabel.Text = "\u5df2\u51c6\u5907\u5c31\u7eea\u3002\u9009\u62e9\u6d41\u7a0b\u79ef\u6728\u4ee5\u4fee\u6539\u53c2\u6570\u3002";
-
-            _shortcutLabel = new Label();
-            _shortcutLabel.Location = new Point(10, 32);
-            _shortcutLabel.Size = new Size(700, 21);
-
-            _changeShortcutButton = new Button();
-            _changeShortcutButton.Text = "\u4fee\u6539\u5feb\u6377\u952e";
-            _changeShortcutButton.Size = new Size(125, 27);
-            _changeShortcutButton.Location = new Point(720, 29);
-            _changeShortcutButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            _changeShortcutButton.Click += delegate { RequestShortcutChange(); };
 
             _stopButton = new Button();
             _stopButton.Text = "\u505c\u6b62\u8fd0\u884c";
             _stopButton.Size = new Size(105, 30);
-            _stopButton.Location = new Point(875, 15);
-            _stopButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            _stopButton.Anchor = AnchorStyles.None;
+            _stopButton.Margin = new Padding(10, 0, 0, 0);
             _stopButton.Enabled = false;
             _stopButton.Click += delegate
             {
@@ -1584,63 +1608,36 @@ namespace SimulateKeyboardInput
                 if (handler != null)
                     handler(this, EventArgs.Empty);
             };
-            footer.Controls.Add(_statusLabel);
-            footer.Controls.Add(_shortcutLabel);
-            footer.Controls.Add(_changeShortcutButton);
-            footer.Controls.Add(_stopButton);
-            footer.SizeChanged += delegate { LayoutFooter(footer); };
-            LayoutFooter(footer);
+            _footer.Controls.Add(_statusLabel, 0, 0);
+            _footer.Controls.Add(_stopButton, 1, 0);
 
             Controls.Add(split);
-            Controls.Add(footer);
+            Controls.Add(_footer);
             Controls.Add(toolbar);
+            Controls.Add(UiChrome.CreatePageHeading("\u624b\u52a8\u64cd\u4f5c\u79ef\u6728",
+                "\u6309\u987a\u5e8f\u7ec4\u5408\u6587\u672c\u3001\u6309\u952e\u3001\u7b49\u5f85\u548c\u5faa\u73af\u3002"));
 
-            SetShortcutText(String.Empty);
             RenderProperties();
         }
 
-        public void SetShortcutText(string shortcut)
+        public void SetStatusText(string message)
         {
-            _shortcutLabel.Text = String.IsNullOrEmpty(shortcut) ?
-                "\u8bf7\u5148\u8bbe\u7f6e\u5168\u5c40\u5feb\u6377\u952e\u3002" :
-                "\u5207\u6362\u5230\u76ee\u6807\u7a97\u53e3\uff0c\u6309 " + shortcut + " \u542f\u52a8\uff1b\u518d\u6b21\u6309\u4e0b\u505c\u6b62\u3002";
+            _statusLabel.Text = message ?? String.Empty;
         }
 
-        private void LayoutFooter(Panel footer)
+        internal string GetStatusTextForSelfTest()
         {
-            _stopButton.Left = Math.Max(10, footer.ClientSize.Width - _stopButton.Width - 10);
-            _changeShortcutButton.Left = Math.Max(10,
-                _stopButton.Left - _changeShortcutButton.Width - 10);
-            _shortcutLabel.Width = Math.Max(0,
-                _changeShortcutButton.Left - _shortcutLabel.Left - 10);
-            _statusLabel.Width = Math.Max(0, _stopButton.Left - _statusLabel.Left - 15);
+            return _statusLabel.Text;
         }
 
-        private void RequestShortcutChange()
+        internal void RunFooterLayoutSelfTest()
         {
-            EventHandler handler = ShortcutChangeRequested;
-            if (handler != null)
-                handler(this, EventArgs.Empty);
-        }
-
-        internal void RunShortcutChangeSelfTest()
-        {
-            if (_changeShortcutButton.Text != "\u4fee\u6539\u5feb\u6377\u952e")
-                throw new InvalidOperationException("The shortcut-change button is missing from the manual page.");
-
-            int requestCount = 0;
-            EventHandler handler = delegate { requestCount++; };
-            ShortcutChangeRequested += handler;
-            try
-            {
-                _changeShortcutButton.PerformClick();
-            }
-            finally
-            {
-                ShortcutChangeRequested -= handler;
-            }
-            if (requestCount != 1)
-                throw new InvalidOperationException("The manual-page shortcut-change event was not raised.");
+            _footer.PerformLayout();
+            int buttonCenter = _stopButton.Top + _stopButton.Height / 2;
+            if (_statusLabel.Dock != DockStyle.Fill ||
+                _statusLabel.TextAlign != ContentAlignment.MiddleLeft ||
+                Math.Abs(buttonCenter - _footer.ClientSize.Height / 2) > 2)
+                throw new InvalidOperationException("The manual-page status and stop action are not vertically aligned.");
         }
 
         public ManualProgram GetProgram()
@@ -2343,7 +2340,9 @@ namespace SimulateKeyboardInput
         private const int VkShift = 0x10;
 
         private readonly TextBox _pathBox;
+        private readonly FlowLayoutPanel _shortcutBar;
         private readonly Label _hotkeyValueLabel;
+        private readonly Button _changeShortcutButton;
         private readonly Label _statusLabel;
         private readonly CheckBox _intervalCheckBox;
         private readonly NumericUpDown _intervalMillisecondsInput;
@@ -2383,56 +2382,71 @@ namespace SimulateKeyboardInput
             _sourceTabs.Dock = DockStyle.Fill;
             TabPage filePage = new TabPage("\u6587\u672c\u6587\u4ef6\u8f93\u5165");
             filePage.Size = new Size(1000, 650);
+            filePage.BackColor = SystemColors.Control;
+            filePage.Padding = new Padding(12);
             _manualTab = new TabPage("\u624b\u52a8\u64cd\u4f5c\u79ef\u6728");
+            _manualTab.BackColor = SystemColors.Control;
+            _manualTab.Padding = new Padding(12);
             _manualPanel = new ManualOperationPanel();
-            _manualPanel.SetShortcutText(_shortcut.DisplayText());
-            _manualPanel.ShortcutChangeRequested += ChangeShortcut;
             _manualTab.Controls.Add(_manualPanel);
             _sourceTabs.TabPages.Add(filePage);
             _sourceTabs.TabPages.Add(_manualTab);
-            Controls.Add(_sourceTabs);
 
-            Label fileLabel = new Label();
-            fileLabel.AutoSize = true;
-            fileLabel.Location = new Point(20, 22);
-            fileLabel.Text = "\u6587\u672c\u6587\u4ef6";
-
-            _pathBox = new TextBox();
-            _pathBox.ReadOnly = true;
-            _pathBox.Location = new Point(95, 18);
-            _pathBox.Size = new Size(620, 24);
-            _pathBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-
-            Button browseButton = new Button();
-            browseButton.Text = "\u9009\u62e9\u6587\u4ef6...";
-            browseButton.Location = new Point(730, 17);
-            browseButton.Size = new Size(90, 27);
-            browseButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            browseButton.Click += BrowseForFile;
+            _shortcutBar = new FlowLayoutPanel();
+            _shortcutBar.Dock = DockStyle.Top;
+            _shortcutBar.Height = 50;
+            _shortcutBar.Padding = new Padding(18, 9, 18, 9);
+            _shortcutBar.FlowDirection = FlowDirection.LeftToRight;
+            _shortcutBar.WrapContents = false;
+            _shortcutBar.BackColor = SystemColors.Control;
 
             Label hotkeyLabel = new Label();
             hotkeyLabel.AutoSize = true;
-            hotkeyLabel.Location = new Point(20, 66);
+            hotkeyLabel.Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold);
+            hotkeyLabel.Margin = new Padding(0, 6, 8, 0);
             hotkeyLabel.Text = "\u5168\u5c40\u5feb\u6377\u952e";
 
             _hotkeyValueLabel = new Label();
             _hotkeyValueLabel.AutoSize = true;
-            _hotkeyValueLabel.Location = new Point(120, 66);
+            _hotkeyValueLabel.Font = new Font(SystemFonts.MessageBoxFont, FontStyle.Bold);
+            _hotkeyValueLabel.Margin = new Padding(0, 6, 0, 0);
             _hotkeyValueLabel.Text = _shortcut.DisplayText();
 
-            Button changeShortcutButton = new Button();
-            changeShortcutButton.Text = "\u4fee\u6539\u5feb\u6377\u952e";
-            changeShortcutButton.Location = new Point(250, 61);
-            changeShortcutButton.Size = new Size(115, 27);
-            changeShortcutButton.Click += ChangeShortcut;
+            _changeShortcutButton = new Button();
+            _changeShortcutButton.Text = "\u4fee\u6539\u5feb\u6377\u952e";
+            _changeShortcutButton.Size = new Size(122, 28);
+            _changeShortcutButton.Margin = new Padding(18, 0, 0, 0);
+            _changeShortcutButton.Click += ChangeShortcut;
+
+            _shortcutBar.Controls.Add(hotkeyLabel);
+            _shortcutBar.Controls.Add(_hotkeyValueLabel);
+            _shortcutBar.Controls.Add(_changeShortcutButton);
+
+            Label fileLabel = new Label();
+            fileLabel.AutoSize = true;
+            fileLabel.Location = new Point(20, 85);
+            fileLabel.Text = "\u8f93\u5165\u6587\u4ef6";
+
+            _pathBox = new TextBox();
+            _pathBox.ReadOnly = true;
+            _pathBox.Location = new Point(105, 81);
+            _pathBox.Size = new Size(610, 24);
+            _pathBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+
+            Button browseButton = new Button();
+            browseButton.Text = "\u9009\u62e9\u6587\u4ef6...";
+            browseButton.Location = new Point(730, 79);
+            browseButton.Size = new Size(90, 27);
+            browseButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            browseButton.Click += BrowseForFile;
 
             _intervalCheckBox = new CheckBox();
             _intervalCheckBox.AutoSize = true;
-            _intervalCheckBox.Location = new Point(20, 101);
+            _intervalCheckBox.Location = new Point(20, 127);
             _intervalCheckBox.Text = "\u6309\u5b57\u7b26\u95f4\u9694\u8f93\u51fa";
 
             _intervalMillisecondsInput = new NumericUpDown();
-            _intervalMillisecondsInput.Location = new Point(165, 98);
+            _intervalMillisecondsInput.Location = new Point(165, 124);
             _intervalMillisecondsInput.Size = new Size(65, 24);
             _intervalMillisecondsInput.Minimum = 1;
             _intervalMillisecondsInput.Maximum = 1000;
@@ -2445,34 +2459,44 @@ namespace SimulateKeyboardInput
 
             Label intervalUnitLabel = new Label();
             intervalUnitLabel.AutoSize = true;
-            intervalUnitLabel.Location = new Point(238, 102);
+            intervalUnitLabel.Location = new Point(238, 128);
             intervalUnitLabel.Text = "\u6beb\u79d2 / \u5b57\u7b26\uff081\u20131000\uff09";
 
             Label instructions = new Label();
             instructions.AutoSize = false;
-            instructions.Location = new Point(20, 137);
+            instructions.Location = new Point(20, 168);
             instructions.Size = new Size(800, 40);
             instructions.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             instructions.Text = "\u5148\u9009\u62e9\u6587\u672c\u6587\u4ef6\uff0c\u518d\u5207\u6362\u5230\u76ee\u6807\u8f93\u5165\u4f4d\u7f6e\uff0c\u7136\u540e\u6309\u5feb\u6377\u952e\u3002";
 
+            Panel fileFooter = new Panel();
+            fileFooter.Dock = DockStyle.Bottom;
+            fileFooter.Height = 48;
+            fileFooter.BorderStyle = BorderStyle.FixedSingle;
+            fileFooter.BackColor = SystemColors.Control;
+
             _statusLabel = new Label();
-            _statusLabel.AutoSize = false;
-            _statusLabel.Location = new Point(20, 190);
-            _statusLabel.Size = new Size(800, 24);
-            _statusLabel.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            _statusLabel.Dock = DockStyle.Fill;
+            _statusLabel.Padding = new Padding(12, 0, 12, 0);
+            _statusLabel.TextAlign = ContentAlignment.MiddleLeft;
+            _statusLabel.AutoEllipsis = true;
             _statusLabel.Text = "\u7b49\u5f85\u9009\u62e9\u6587\u4ef6";
+            fileFooter.Controls.Add(_statusLabel);
 
             filePage.Controls.Add(fileLabel);
             filePage.Controls.Add(_pathBox);
             filePage.Controls.Add(browseButton);
-            filePage.Controls.Add(hotkeyLabel);
-            filePage.Controls.Add(_hotkeyValueLabel);
-            filePage.Controls.Add(changeShortcutButton);
             filePage.Controls.Add(_intervalCheckBox);
             filePage.Controls.Add(_intervalMillisecondsInput);
             filePage.Controls.Add(intervalUnitLabel);
             filePage.Controls.Add(instructions);
-            filePage.Controls.Add(_statusLabel);
+            filePage.Controls.Add(fileFooter);
+            filePage.Controls.Add(UiChrome.CreatePageHeading(
+                "\u6587\u672c\u6587\u4ef6\u8f93\u5165",
+                "\u9009\u62e9\u6587\u4ef6\u5e76\u8bbe\u7f6e\u6587\u672c\u8f93\u51fa\u65b9\u5f0f\u3002"));
+
+            Controls.Add(_sourceTabs);
+            Controls.Add(_shortcutBar);
 
             _manualPanel.StopRequested += delegate
             {
@@ -2500,13 +2524,57 @@ namespace SimulateKeyboardInput
             Application.Run(new KeyboardForm());
         }
 
+        internal void RunSharedChromeSelfTest()
+        {
+            PerformLayout();
+            _shortcutBar.PerformLayout();
+            if (_shortcutBar.Parent != this || _sourceTabs.Parent != this ||
+                _shortcutBar.Dock != DockStyle.Top || _sourceTabs.Dock != DockStyle.Fill ||
+                _hotkeyValueLabel.Parent != _shortcutBar ||
+                _changeShortcutButton.Parent != _shortcutBar ||
+                _sourceTabs.TabPages.Count != 2 ||
+                _changeShortcutButton.Text != "\u4fee\u6539\u5feb\u6377\u952e" ||
+                _hotkeyValueLabel.Text != _shortcut.DisplayText() ||
+                _shortcutBar.Top != 0 || _sourceTabs.Top < _shortcutBar.Bottom ||
+                _sourceTabs.Bottom > ClientSize.Height)
+                throw new InvalidOperationException("The shared shortcut header is not connected to both source pages.");
+        }
+
+        internal void RunStatusRoutingSelfTest()
+        {
+            TabPage originalTab = _sourceTabs.SelectedTab;
+            string originalFileStatus = _statusLabel.Text;
+            string originalManualStatus = _manualPanel.GetStatusTextForSelfTest();
+            try
+            {
+                const string manualMessage = "manual status routing test";
+                _sourceTabs.SelectedTab = _manualTab;
+                SetStatus(manualMessage);
+                if (_statusLabel.Text != originalFileStatus ||
+                    _manualPanel.GetStatusTextForSelfTest() != manualMessage)
+                    throw new InvalidOperationException("Manual-page status was not isolated from the inactive file page.");
+
+                const string fileMessage = "file status routing test";
+                _sourceTabs.SelectedTab = _sourceTabs.TabPages[0];
+                SetStatus(fileMessage);
+                if (_statusLabel.Text != fileMessage ||
+                    _manualPanel.GetStatusTextForSelfTest() != manualMessage)
+                    throw new InvalidOperationException("File-page status leaked into the inactive manual page.");
+            }
+            finally
+            {
+                _statusLabel.Text = originalFileStatus;
+                _manualPanel.SetStatusText(originalManualStatus);
+                _sourceTabs.SelectedTab = originalTab;
+            }
+        }
+
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
             if (RegisterShortcut(_shortcut))
             {
                 SetStatus("\u5feb\u6377\u952e\u5df2\u5c31\u7eea\uff08" + _shortcut.DisplayText() + "\uff09\uff1b\u8bf7\u9009\u62e9\u6587\u4ef6\u3002");
-                _manualPanel.SetShortcutText(_shortcut.DisplayText());
             }
             else
             {
@@ -2602,7 +2670,6 @@ namespace SimulateKeyboardInput
 
                     _shortcut = updated;
                     _hotkeyValueLabel.Text = _shortcut.DisplayText();
-                    _manualPanel.SetShortcutText(_shortcut.DisplayText());
                     saved = true;
                     SetStatus("\u5feb\u6377\u952e\u5df2\u66f4\u65b0\u5e76\u4fdd\u5b58\u3002");
                 }
@@ -2848,7 +2915,10 @@ namespace SimulateKeyboardInput
 
         private void SetStatus(string text)
         {
-            _statusLabel.Text = text;
+            if (_sourceTabs.SelectedTab == _manualTab)
+                _manualPanel.SetStatusText(text);
+            else
+                _statusLabel.Text = text;
         }
     }
 }
