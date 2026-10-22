@@ -1344,8 +1344,9 @@ namespace SimulateKeyboardInput
                 Assert(form.Controls.Count == 2, "The shared header and source tabs were not initialized.");
                 form.RunSharedChromeSelfTest();
                 form.RunStatusRoutingSelfTest();
+                form.RunFileDropSelfTest();
             }
-            return "Self-test passed: nested JSON persistence, key-chord parsing, loop limits, cancellation, control-key capture/display, aligned status actions, shared page chrome, and page-specific status routing.";
+            return "Self-test passed: nested JSON persistence, key-chord parsing, loop limits, cancellation, control-key capture/display, aligned status actions, shared page chrome, page-specific status routing, and file drag-and-drop.";
         }
 
         private static void Assert(bool condition, string message)
@@ -2494,6 +2495,7 @@ namespace SimulateKeyboardInput
             filePage.Controls.Add(UiChrome.CreatePageHeading(
                 "\u6587\u672c\u6587\u4ef6\u8f93\u5165",
                 "\u9009\u62e9\u6587\u4ef6\u5e76\u8bbe\u7f6e\u6587\u672c\u8f93\u51fa\u65b9\u5f0f\u3002"));
+            EnableFileDrop(filePage);
 
             Controls.Add(_sourceTabs);
             Controls.Add(_shortcutBar);
@@ -2608,14 +2610,108 @@ namespace SimulateKeyboardInput
                 dialog.Multiselect = false;
                 dialog.CheckFileExists = true;
                 if (dialog.ShowDialog(this) == DialogResult.OK)
+                    SelectFile(dialog.FileName);
+            }
+        }
+
+        private void SelectFile(string path)
+        {
+            _selectedPath = path;
+            _pathBox.Text = path;
+            if (_hotkeyRegistered)
+                SetStatus("\u6587\u4ef6\u5df2\u9009\u4e2d\uff1b\u5207\u6362\u5230\u76ee\u6807\u7a97\u53e3\u540e\u6309 " + _shortcut.DisplayText() + "\u3002");
+            else
+                SetStatus("\u6587\u4ef6\u5df2\u9009\u4e2d\uff0c\u4f46\u5168\u5c40\u5feb\u6377\u952e\u4e0d\u53ef\u7528\u3002");
+        }
+
+        private void EnableFileDrop(Control control)
+        {
+            control.AllowDrop = true;
+            control.DragEnter += FileDragEnter;
+            control.DragOver += FileDragEnter;
+            control.DragDrop += FileDragDrop;
+            foreach (Control child in control.Controls)
+                EnableFileDrop(child);
+        }
+
+        private static string GetDroppedFile(DragEventArgs e)
+        {
+            if ((e.AllowedEffect & DragDropEffects.Copy) == 0 || e.Data == null ||
+                !e.Data.GetDataPresent(DataFormats.FileDrop))
+                return null;
+            string[] paths = e.Data.GetData(DataFormats.FileDrop) as string[];
+            return paths != null && paths.Length == 1 && File.Exists(paths[0]) ? paths[0] : null;
+        }
+
+        private void FileDragEnter(object sender, DragEventArgs e)
+        {
+            e.Effect = GetDroppedFile(e) != null ? DragDropEffects.Copy : DragDropEffects.None;
+        }
+
+        private void FileDragDrop(object sender, DragEventArgs e)
+        {
+            string path = GetDroppedFile(e);
+            e.Effect = path != null ? DragDropEffects.Copy : DragDropEffects.None;
+            if (path != null)
+                SelectFile(path);
+        }
+
+        internal void RunFileDropSelfTest()
+        {
+            string originalPath = _selectedPath;
+            string originalStatus = _statusLabel.Text;
+            string temporaryPath = Path.Combine(Path.GetTempPath(),
+                "SimulateKeyboardInput-drop-" + Guid.NewGuid().ToString("N") + " \u6587\u672c.txt");
+            try
+            {
+                File.WriteAllText(temporaryPath, "drop test");
+                Control[] targets = new Control[] { _sourceTabs.TabPages[0], _pathBox };
+                foreach (Control target in targets)
                 {
-                    _selectedPath = dialog.FileName;
-                    _pathBox.Text = _selectedPath;
-                    if (_hotkeyRegistered)
-                        SetStatus("\u6587\u4ef6\u5df2\u9009\u4e2d\uff1b\u5207\u6362\u5230\u76ee\u6807\u7a97\u53e3\u540e\u6309 " + _shortcut.DisplayText() + "\u3002");
-                    else
-                        SetStatus("\u6587\u4ef6\u5df2\u9009\u4e2d\uff0c\u4f46\u5168\u5c40\u5feb\u6377\u952e\u4e0d\u53ef\u7528\u3002");
+                    _selectedPath = null;
+                    _pathBox.Text = String.Empty;
+                    _statusLabel.Text = originalStatus;
+                    DataObject data = new DataObject(DataFormats.FileDrop, new string[] { temporaryPath });
+                    DragEventArgs drag = new DragEventArgs(data, 0, 0, 0, DragDropEffects.Copy, DragDropEffects.None);
+                    if (!target.AllowDrop)
+                        throw new InvalidOperationException("The file page and path box must accept drops.");
+                    typeof(Control).GetMethod("OnDragEnter", System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.NonPublic).Invoke(target, new object[] { drag });
+                    if (drag.Effect != DragDropEffects.Copy)
+                        throw new InvalidOperationException("A single existing file was not accepted.");
+                    typeof(Control).GetMethod("OnDragDrop", System.Reflection.BindingFlags.Instance |
+                        System.Reflection.BindingFlags.NonPublic).Invoke(target, new object[] { drag });
+                    if (_selectedPath != temporaryPath || _pathBox.Text != temporaryPath ||
+                        _statusLabel.Text == originalStatus)
+                        throw new InvalidOperationException("A dropped file did not update the selection and status.");
                 }
+
+                object[] rejectedData = new object[]
+                {
+                    new string[] { Path.GetDirectoryName(temporaryPath) },
+                    new string[] { temporaryPath, temporaryPath },
+                    new string[] { temporaryPath + ".missing" },
+                    new string[0], "plain text"
+                };
+                foreach (object value in rejectedData)
+                {
+                    DataObject data = value is string[] ? new DataObject(DataFormats.FileDrop, value) :
+                        new DataObject(DataFormats.Text, value);
+                    DragEventArgs drag = new DragEventArgs(data, 0, 0, 0, DragDropEffects.Copy, DragDropEffects.Copy);
+                    FileDragEnter(_pathBox, drag);
+                    FileDragDrop(_pathBox, drag);
+                    if (drag.Effect != DragDropEffects.None || _selectedPath != temporaryPath ||
+                        _pathBox.Text != temporaryPath)
+                        throw new InvalidOperationException("An invalid drop replaced the selected file.");
+                }
+            }
+            finally
+            {
+                _selectedPath = originalPath;
+                _pathBox.Text = originalPath;
+                _statusLabel.Text = originalStatus;
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
             }
         }
 
