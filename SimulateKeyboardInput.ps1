@@ -3297,7 +3297,6 @@ namespace SimulateKeyboardInput
         private readonly FlowLayoutPanel _headerActions;
         private readonly Label _readyLabel;
         private readonly HotkeyDisplay _hotkeyDisplay;
-        private readonly HotkeyDisplay _hotkeySteps;
         private readonly Button _changeShortcutButton;
         private readonly Label _statusLabel;
         private readonly ToggleSwitch _intervalToggle;
@@ -3366,11 +3365,6 @@ namespace SimulateKeyboardInput
             Padding = new Padding(5);
 
             _titleBar = new Panel { Dock = DockStyle.Top, Height = 46, BackColor = UiChrome.Surface };
-            _titleBar.Paint += delegate(object sender, PaintEventArgs e)
-            {
-                using (Pen pen = new Pen(UiChrome.Line))
-                    e.Graphics.DrawLine(pen, 0, _titleBar.Height - 1, _titleBar.Width, _titleBar.Height - 1);
-            };
             BrandMark titleMark = new BrandMark { Location = new Point(10, 4) };
             Label titleText = UiChrome.Label(Text, 9.0F, UiChrome.Text, FontStyle.Bold);
             titleText.Location = new Point(49, 14);
@@ -3385,6 +3379,8 @@ namespace SimulateKeyboardInput
             _titleBar.Controls.Add(minimizeButton);
             _titleBar.Controls.Add(_maximizeButton);
             _titleBar.Controls.Add(closeButton);
+            Panel titleBarBorder = new Panel { Dock = DockStyle.Bottom, Height = 1, BackColor = UiChrome.Line };
+            _titleBar.Controls.Add(titleBarBorder);
             _titleBar.MouseDown += TitleBarMouseDown;
             titleMark.MouseDown += TitleBarMouseDown;
             titleText.MouseDown += TitleBarMouseDown;
@@ -3441,11 +3437,6 @@ namespace SimulateKeyboardInput
 
             Panel workspace = new Panel { Dock = DockStyle.Fill, BackColor = UiChrome.Background };
             Panel sidebar = new Panel { Dock = DockStyle.Left, Width = 210, BackColor = UiChrome.Surface };
-            sidebar.Paint += delegate(object sender, PaintEventArgs e)
-            {
-                using (Pen pen = new Pen(UiChrome.Line))
-                    e.Graphics.DrawLine(pen, sidebar.Width - 1, 0, sidebar.Width - 1, sidebar.Height);
-            };
 
             Panel brand = new Panel();
             brand.Location = new Point(18, 20);
@@ -3501,7 +3492,7 @@ namespace SimulateKeyboardInput
             sidebarHint.Controls.Add(hintText);
             hintContainer.Controls.Add(sidebarHint);
 
-            Label version = UiChrome.Label("Keyboard Flow  \u00b7  v1.2.0", 7.0F, UiChrome.Muted);
+            Label version = UiChrome.Label("Keyboard Flow  \u00b7  v1.2.1", 7.0F, UiChrome.Muted);
             version.Dock = DockStyle.Bottom;
             version.Height = 34;
             version.TextAlign = ContentAlignment.MiddleLeft;
@@ -3513,6 +3504,8 @@ namespace SimulateKeyboardInput
             sidebar.Controls.Add(manualNav);
             sidebar.Controls.Add(hintContainer);
             sidebar.Controls.Add(version);
+            Panel sidebarBorder = new Panel { Dock = DockStyle.Right, Width = 1, BackColor = UiChrome.Line };
+            sidebar.Controls.Add(sidebarBorder);
 
             Panel mainHost = new Panel();
             mainHost.Dock = DockStyle.Fill;
@@ -3543,13 +3536,12 @@ namespace SimulateKeyboardInput
             stepsCard.Paint += UiChrome.PaintCard;
             TableLayoutPanel stepsLayout = new TableLayoutPanel();
             stepsLayout.Dock = DockStyle.Fill;
-            stepsLayout.ColumnCount = 3;
+            stepsLayout.ColumnCount = 2;
             stepsLayout.RowCount = 1;
             stepsLayout.Padding = new Padding(16, 0, 16, 0);
             stepsLayout.BackColor = UiChrome.Surface;
             stepsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             stepsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            stepsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             stepsLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
             FlowLayoutPanel stepsTitle = new FlowLayoutPanel();
@@ -3578,14 +3570,8 @@ namespace SimulateKeyboardInput
             stepsText.AutoEllipsis = true;
             stepsText.Margin = new Padding(20, 0, 12, 0);
 
-            _hotkeySteps = new HotkeyDisplay();
-            _hotkeySteps.SetDisplay(_shortcut.DisplayText());
-            _hotkeySteps.Anchor = AnchorStyles.None;
-            _hotkeySteps.Margin = new Padding(0, 0, 0, 0);
-
             stepsLayout.Controls.Add(stepsTitle, 0, 0);
             stepsLayout.Controls.Add(stepsText, 1, 0);
-            stepsLayout.Controls.Add(_hotkeySteps, 2, 0);
             stepsCard.Controls.Add(stepsLayout);
 
             Panel statusBar = new Panel();
@@ -3651,13 +3637,7 @@ namespace SimulateKeyboardInput
             fileCardTitle.Dock = DockStyle.Fill;
             fileCardTitle.TextAlign = ContentAlignment.MiddleLeft;
             fileCardTitle.Padding = new Padding(19, 0, 0, 0);
-            Label fileTypes = UiChrome.Label("TXT    MD    CSV    LOG", 7.0F, UiChrome.Muted);
-            fileTypes.Dock = DockStyle.Right;
-            fileTypes.Width = 160;
-            fileTypes.TextAlign = ContentAlignment.MiddleRight;
-            fileTypes.Padding = new Padding(0, 0, 18, 0);
             fileCardHeader.Controls.Add(fileCardTitle);
-            fileCardHeader.Controls.Add(fileTypes);
 
             _dropSurface = new DropZone();
             _dropSurface.Dock = DockStyle.Fill;
@@ -3998,7 +3978,6 @@ namespace SimulateKeyboardInput
         {
             string text = _shortcut.DisplayText();
             _hotkeyDisplay.SetDisplay(text);
-            _hotkeySteps.SetDisplay(text);
             LayoutHeaderActions();
         }
 
