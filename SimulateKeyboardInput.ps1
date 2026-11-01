@@ -2078,6 +2078,75 @@ namespace SimulateKeyboardInput
         }
     }
 
+    public sealed class TextEditor : Panel
+    {
+        private sealed class EditorBox : TextBox
+        {
+            public Control Gutter;
+
+            protected override void WndProc(ref Message message)
+            {
+                base.WndProc(ref message);
+                if (Gutter != null && (message.Msg == 0x115 || message.Msg == 0x20A ||
+                    message.Msg == 0x114 || message.Msg == 0x100 || message.Msg == 0x102))
+                    Gutter.Invalidate();
+            }
+        }
+
+        private readonly EditorBox _editor;
+        private readonly Panel _gutter;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr handle, int message, IntPtr wParam, IntPtr lParam);
+
+        public TextBox Input { get { return _editor; } }
+
+        public TextEditor()
+        {
+            BackColor = Color.White;
+            Padding = new Padding(1);
+            BorderStyle = BorderStyle.FixedSingle;
+            _gutter = new Panel { Dock = DockStyle.Left, Width = 42, BackColor = Color.FromArgb(250, 250, 255) };
+            _editor = new EditorBox();
+            _editor.Dock = DockStyle.Fill;
+            _editor.BorderStyle = BorderStyle.None;
+            _editor.Font = new Font("Consolas", 9.0F);
+            _editor.Multiline = true;
+            _editor.AcceptsTab = true;
+            _editor.WordWrap = false;
+            _editor.ScrollBars = ScrollBars.Both;
+            _editor.AcceptsReturn = true;
+            _editor.MaxLength = Int32.MaxValue;
+            _editor.Gutter = _gutter;
+            _editor.TextChanged += delegate { _gutter.Invalidate(); };
+            _editor.Resize += delegate { _gutter.Invalidate(); };
+            _gutter.Paint += PaintLineNumbers;
+            Controls.Add(_editor);
+            Controls.Add(_gutter);
+        }
+
+        private void PaintLineNumbers(object sender, PaintEventArgs e)
+        {
+            if (!_editor.IsHandleCreated)
+                return;
+            int first = (int)SendMessage(_editor.Handle, 0x00CE, IntPtr.Zero, IntPtr.Zero);
+            int lineCount = _editor.Lines.Length;
+            int lineHeight = _editor.Font.Height;
+            for (int line = first; line <= lineCount; line++)
+            {
+                int index = _editor.GetFirstCharIndexFromLine(line);
+                if (index < 0)
+                    break;
+                int y = _editor.GetPositionFromCharIndex(index).Y;
+                if (y >= _gutter.Height)
+                    break;
+                TextRenderer.DrawText(e.Graphics, (line + 1).ToString(CultureInfo.CurrentCulture), _editor.Font,
+                    new Rectangle(0, y, _gutter.Width - 6, lineHeight), Color.FromArgb(160, 166, 181),
+                    TextFormatFlags.Right | TextFormatFlags.NoPadding);
+            }
+        }
+    }
+
     public sealed class NavButton : Button
     {
         private readonly bool _fileIcon;
@@ -3309,6 +3378,10 @@ namespace SimulateKeyboardInput
         private readonly RoundedPanel _infoBox;
         private readonly Label _infoText;
         private readonly DropZone _dropSurface;
+        private readonly TextBox _textInput;
+        private readonly TextEditor _textEditor;
+        private readonly Button _replaceFileButton;
+        private readonly Label _dropHint;
         private readonly Panel _dropEmpty;
         private readonly RoundedPanel _selectedFile;
         private readonly Label _selectedFileName;
@@ -3438,29 +3511,15 @@ namespace SimulateKeyboardInput
             Panel workspace = new Panel { Dock = DockStyle.Fill, BackColor = UiChrome.Background };
             Panel sidebar = new Panel { Dock = DockStyle.Left, Width = 210, BackColor = UiChrome.Surface };
 
-            Panel brand = new Panel();
-            brand.Location = new Point(18, 20);
-            brand.Size = new Size(180, 58);
-            brand.BackColor = UiChrome.Surface;
-            BrandMark brandMark = new BrandMark();
-            brandMark.Location = new Point(0, 0);
-            Label brandTitle = UiChrome.Label("\u952E\u76D8\u8F93\u5165\u52A9\u624B", 11.0F, UiChrome.Text, FontStyle.Bold);
-            brandTitle.Location = new Point(50, 0);
-            Label brandSubtitle = UiChrome.Label("KEYBOARD FLOW", 6.5F, UiChrome.Muted);
-            brandSubtitle.Location = new Point(52, 25);
-            brand.Controls.Add(brandMark);
-            brand.Controls.Add(brandTitle);
-            brand.Controls.Add(brandSubtitle);
-
             Label navHeading = UiChrome.Label("\u5DE5\u4F5C\u533A", 7.5F, UiChrome.Muted);
-            navHeading.Location = new Point(20, 102);
+            navHeading.Location = new Point(20, 24);
 
             NavButton fileNav = new NavButton("\u6587\u672C\u6587\u4EF6\u8F93\u5165", true);
-            fileNav.Location = new Point(14, 126);
+            fileNav.Location = new Point(14, 48);
             fileNav.Size = new Size(182, 44);
             fileNav.Click += delegate { _sourceTabs.SelectedIndex = 0; };
             NavButton manualNav = new NavButton("\u624B\u52A8\u64CD\u4F5C\u79EF\u6728", false);
-            manualNav.Location = new Point(14, 176);
+            manualNav.Location = new Point(14, 98);
             manualNav.Size = new Size(182, 44);
             manualNav.Click += delegate { _sourceTabs.SelectedIndex = 1; };
 
@@ -3498,7 +3557,6 @@ namespace SimulateKeyboardInput
             version.TextAlign = ContentAlignment.MiddleLeft;
             version.Padding = new Padding(18, 0, 0, 0);
 
-            sidebar.Controls.Add(brand);
             sidebar.Controls.Add(navHeading);
             sidebar.Controls.Add(fileNav);
             sidebar.Controls.Add(manualNav);
@@ -3523,7 +3581,7 @@ namespace SimulateKeyboardInput
 
             _fileHeading = new PageHeading("\u6587\u672C\u6587\u4EF6\u8F93\u5165",
                 "\u9009\u62E9\u6587\u672C\u5185\u5BB9\uFF0C\u4EE5\u81EA\u7136\u3001\u53EF\u63A7\u7684\u8282\u594F\u8F93\u5165\u5230\u76EE\u6807\u7A97\u53E3\u3002");
-            _fileHeading.SetBadge("\u7B49\u5F85\u9009\u62E9\u6587\u4EF6", UiChrome.NeutralSoft, UiChrome.Muted);
+            _fileHeading.SetBadge("\u7B49\u5F85\u8F93\u5165\u5185\u5BB9", UiChrome.NeutralSoft, UiChrome.Muted);
 
             Panel fileFooter = new Panel();
             fileFooter.Dock = DockStyle.Bottom;
@@ -3562,7 +3620,7 @@ namespace SimulateKeyboardInput
             stepsTitle.Controls.Add(stepsTitleText);
 
             Label stepsText = UiChrome.Label(
-                "1  \u9009\u62E9\u6587\u672C\u6587\u4EF6   \u2192   2  \u5207\u6362\u5230\u76EE\u6807\u7A97\u53E3   \u2192   3  \u6309\u4E0B\u5168\u5C40\u5FEB\u6377\u952E",
+                "1  \u8F93\u5165\u6216\u9009\u62E9\u6587\u672C   \u2192   2  \u5207\u6362\u5230\u76EE\u6807\u7A97\u53E3   \u2192   3  \u6309\u4E0B\u5168\u5C40\u5FEB\u6377\u952E",
                 8.0F, UiChrome.Muted);
             stepsText.AutoSize = false;
             stepsText.Dock = DockStyle.Fill;
@@ -3595,7 +3653,7 @@ namespace SimulateKeyboardInput
             statusIcon.Size = new Size(14, 14);
             statusIcon.Anchor = AnchorStyles.None;
             statusIcon.Margin = new Padding(0, 0, 0, 0);
-            _statusLabel = UiChrome.Label("\u7B49\u5F85\u9009\u62E9\u6587\u672C\u6587\u4EF6", 8.0F, UiChrome.Muted);
+            _statusLabel = UiChrome.Label("\u7B49\u5F85\u8F93\u5165\u6587\u672C\u6216\u9009\u62E9\u6587\u4EF6", 8.0F, UiChrome.Muted);
             _statusLabel.AutoSize = false;
             _statusLabel.Dock = DockStyle.Fill;
             _statusLabel.TextAlign = ContentAlignment.MiddleLeft;
@@ -3643,34 +3701,34 @@ namespace SimulateKeyboardInput
             _dropSurface.Dock = DockStyle.Fill;
 
             _dropEmpty = new Panel();
-            _dropEmpty.Size = new Size(360, 190);
+            _dropEmpty.Size = new Size(410, 60);
             _dropEmpty.BackColor = _dropSurface.BackColor;
 
             RoundedPanel uploadBox = new RoundedPanel();
-            uploadBox.Location = new Point(152, 0);
-            uploadBox.Size = new Size(56, 56);
-            uploadBox.Radius = 16;
+            uploadBox.Location = new Point(0, 10);
+            uploadBox.Size = new Size(40, 40);
+            uploadBox.Radius = 10;
             uploadBox.FillColor = UiChrome.PrimarySoft;
             VectorIcon uploadIcon = new VectorIcon();
             uploadIcon.Kind = VectorIconKind.Upload;
             uploadIcon.Tint = UiChrome.Primary;
             uploadIcon.BackColor = UiChrome.PrimarySoft;
-            uploadIcon.Size = new Size(28, 28);
-            uploadIcon.Location = new Point(14, 14);
+            uploadIcon.Size = new Size(22, 22);
+            uploadIcon.Location = new Point(9, 9);
             uploadBox.Controls.Add(uploadIcon);
 
             Label dropTitle = UiChrome.Label("\u5C06\u6587\u672C\u6587\u4EF6\u62D6\u5230\u8FD9\u91CC", 11.0F, UiChrome.Text, FontStyle.Bold);
             dropTitle.AutoSize = false;
-            dropTitle.Location = new Point(0, 66);
-            dropTitle.Size = new Size(360, 26);
+            dropTitle.Location = new Point(48, 8);
+            dropTitle.Size = new Size(240, 26);
             dropTitle.TextAlign = ContentAlignment.MiddleCenter;
             Label dropDescription = UiChrome.Label("\u6216\u4ECE\u60A8\u7684\u7535\u8111\u4E2D\u9009\u62E9\u4E00\u4E2A\u6587\u4EF6", 8.5F, UiChrome.Muted);
             dropDescription.AutoSize = false;
-            dropDescription.Location = new Point(0, 96);
-            dropDescription.Size = new Size(360, 22);
+            dropDescription.Location = new Point(48, 34);
+            dropDescription.Size = new Size(240, 22);
             dropDescription.TextAlign = ContentAlignment.MiddleCenter;
             Button browseButton = UiChrome.Button("\u6D4F\u89C8\u6587\u4EF6", true);
-            browseButton.Location = new Point(128, 132);
+            browseButton.Location = new Point(300, 12);
             browseButton.Size = new Size(104, 36);
             browseButton.Click += BrowseForFile;
             _dropEmpty.Controls.Add(uploadBox);
@@ -3687,7 +3745,7 @@ namespace SimulateKeyboardInput
             _selectedFile.Visible = false;
 
             RoundedPanel fileIconBox = new RoundedPanel();
-            fileIconBox.Location = new Point(14, 18);
+            fileIconBox.Location = new Point(14, 12);
             fileIconBox.Size = new Size(40, 40);
             fileIconBox.Radius = 10;
             fileIconBox.FillColor = UiChrome.PrimarySoft;
@@ -3711,27 +3769,40 @@ namespace SimulateKeyboardInput
             _selectedFileSize.AutoEllipsis = true;
 
             _selectedFileRemove = new Button();
-            _selectedFileRemove.Text = "\u00D7";
-            _selectedFileRemove.Font = UiChrome.Font(11.0F);
+            _selectedFileRemove.Text = "\u6E05\u9664";
+            _selectedFileRemove.Font = UiChrome.Font(8.0F);
             _selectedFileRemove.FlatStyle = FlatStyle.Flat;
             _selectedFileRemove.FlatAppearance.BorderSize = 0;
             _selectedFileRemove.BackColor = Color.White;
             _selectedFileRemove.ForeColor = UiChrome.Muted;
             _selectedFileRemove.FlatAppearance.MouseOverBackColor = UiChrome.SurfaceSoft;
-            _selectedFileRemove.Size = new Size(28, 28);
-            _selectedFileRemove.Location = new Point(348, 24);
+            _selectedFileRemove.Size = new Size(52, 32);
             _selectedFileRemove.Cursor = Cursors.Hand;
             _selectedFileRemove.Click += delegate { ClearFile(); };
+
+            _replaceFileButton = UiChrome.Button("\u66F4\u6362\u6587\u4EF6");
+            _replaceFileButton.Size = new Size(82, 32);
+            _replaceFileButton.Click += BrowseForFile;
 
             _selectedFile.Controls.Add(fileIconBox);
             _selectedFile.Controls.Add(_selectedFileName);
             _selectedFile.Controls.Add(_selectedFileSize);
             _selectedFile.Controls.Add(_selectedFileRemove);
+            _selectedFile.Controls.Add(_replaceFileButton);
 
             _dropSurface.Controls.Add(_dropEmpty);
             _dropSurface.Controls.Add(_selectedFile);
             _dropSurface.Resize += delegate { LayoutDropStates(); };
             WireDropClick(_dropSurface);
+
+            _textEditor = new TextEditor();
+            _textInput = _textEditor.Input;
+            _textInput.TextChanged += delegate { UpdateTextState(); };
+            _dropSurface.Controls.Add(_textEditor);
+
+            _dropHint = UiChrome.Label("\u62D6\u5165\u6587\u4EF6\uFF0C\u6216\u5728\u7F16\u8F91\u533A\u8F93\u5165\u3001\u7C98\u8D34\u6587\u672C", 8.0F, UiChrome.Muted);
+            _dropHint.BackColor = _dropSurface.BackColor;
+            _dropSurface.Controls.Add(_dropHint);
 
             Panel dropPadding = new Panel();
             dropPadding.Dock = DockStyle.Fill;
@@ -3956,7 +4027,7 @@ namespace SimulateKeyboardInput
             if (RegisterShortcut(_shortcut))
             {
                 SetReadyState(true);
-                SetStatus("\u5FEB\u6377\u952E\u5DF2\u5C31\u7EEA\uFF08" + _shortcut.DisplayText() + "\uFF09\uFF1B\u8BF7\u9009\u62E9\u6587\u4EF6\u3002");
+                SetStatus("\u5FEB\u6377\u952E\u5DF2\u5C31\u7EEA\uFF08" + _shortcut.DisplayText() + "\uFF09\uFF1B\u8BF7\u8F93\u5165\u6587\u672C\u6216\u9009\u62E9\u6587\u4EF6\u3002");
             }
             else
             {
@@ -4080,7 +4151,18 @@ namespace SimulateKeyboardInput
 
         private void SelectFile(string path)
         {
+            string text;
+            try
+            {
+                text = KeyboardInput.ReadText(path);
+            }
+            catch (Exception ex)
+            {
+                SetStatus("\u8BFB\u53D6\u5931\u8D25\uFF1A" + ex.Message);
+                return;
+            }
             _selectedPath = path;
+            _textInput.Text = text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", "\r\n");
             _dropEmpty.Visible = false;
             _selectedFile.Visible = true;
             _selectedFileName.Text = Path.GetFileName(path);
@@ -4093,11 +4175,11 @@ namespace SimulateKeyboardInput
             {
                 // A file that disappears between selection and display still leaves a usable name.
             }
-            _selectedFileSize.Text = FormatFileSize(length) + " \u00B7 \u5DF2\u51C6\u5907\u8F93\u5165";
-            _fileHeading.SetBadge("\u2713  \u6587\u4EF6\u5DF2\u5C31\u7EEA", UiChrome.SuccessSoft, UiChrome.Success);
-            if (_hotkeyRegistered)
+            _selectedFileSize.Text = FormatFileSize(length);
+            UpdateTextState();
+            if (_hotkeyRegistered && text.Length > 0)
                 SetStatus("\u6587\u4EF6\u5DF2\u9009\u4E2D\uFF1B\u5207\u6362\u5230\u76EE\u6807\u7A97\u53E3\u540E\u6309 " + _shortcut.DisplayText() + "\u3002");
-            else
+            else if (!_hotkeyRegistered)
                 SetStatus("\u6587\u4EF6\u5DF2\u9009\u4E2D\uFF0C\u4F46\u5168\u5C40\u5FEB\u6377\u952E\u4E0D\u53EF\u7528\u3002");
             LayoutDropStates();
         }
@@ -4105,12 +4187,21 @@ namespace SimulateKeyboardInput
         private void ClearFile()
         {
             _selectedPath = null;
+            _textInput.Clear();
             _selectedFileName.Text = String.Empty;
             _selectedFileSize.Text = String.Empty;
             _dropEmpty.Visible = true;
             _selectedFile.Visible = false;
-            _fileHeading.SetBadge("\u7B49\u5F85\u9009\u62E9\u6587\u4EF6", UiChrome.NeutralSoft, UiChrome.Muted);
-            SetStatus("\u7B49\u5F85\u9009\u62E9\u6587\u672C\u6587\u4EF6");
+            UpdateTextState();
+        }
+
+        private void UpdateTextState()
+        {
+            bool hasText = _textInput.TextLength > 0;
+            _fileHeading.SetBadge(hasText ? "\u2713  \u5185\u5BB9\u5DF2\u5C31\u7EEA" : "\u7B49\u5F85\u8F93\u5165\u5185\u5BB9",
+                hasText ? UiChrome.SuccessSoft : UiChrome.NeutralSoft, hasText ? UiChrome.Success : UiChrome.Muted);
+            SetStatus(hasText ? "\u5185\u5BB9\u5DF2\u51C6\u5907\uFF1B\u5207\u6362\u5230\u76EE\u6807\u7A97\u53E3\u540E\u6309\u5FEB\u6377\u952E\u3002" :
+                "\u7B49\u5F85\u8F93\u5165\u6587\u672C\u6216\u9009\u62E9\u6587\u4EF6");
         }
 
         private static string FormatFileSize(long bytes)
@@ -4128,16 +4219,19 @@ namespace SimulateKeyboardInput
             int height = _dropSurface.ClientSize.Height;
             _dropEmpty.Location = new Point(
                 Math.Max(0, (width - _dropEmpty.Width) / 2),
-                Math.Max(0, (height - _dropEmpty.Height) / 2));
-            int chipWidth = Math.Min(390, Math.Max(220, width - 64));
-            _selectedFile.Size = new Size(chipWidth, 76);
-            _selectedFile.Location = new Point(
-                Math.Max(0, (width - chipWidth) / 2),
-                Math.Max(0, (height - _selectedFile.Height) / 2));
-            int removeX = chipWidth - 42;
-            _selectedFileRemove.Location = new Point(removeX, 24);
-            _selectedFileName.Width = Math.Max(60, removeX - 66 - 10);
+                8);
+            int chipWidth = Math.Max(0, width - 24);
+            _selectedFile.Size = new Size(chipWidth, 64);
+            _selectedFile.Location = new Point(12, 10);
+            int removeX = chipWidth - 60;
+            _selectedFileRemove.Location = new Point(removeX, 16);
+            _replaceFileButton.Location = new Point(removeX - 88, 16);
+            _selectedFileName.Width = Math.Max(30, removeX - 88 - 66 - 10);
             _selectedFileSize.Width = _selectedFileName.Width;
+            if (_textEditor != null)
+                _textEditor.Bounds = new Rectangle(12, 84, Math.Max(0, width - 24), Math.Max(0, height - 118));
+            if (_dropHint != null)
+                _dropHint.Location = new Point(16, Math.Max(84, height - 26));
         }
 
         private void ApplyIntervalState()
@@ -4252,7 +4346,7 @@ namespace SimulateKeyboardInput
             try
             {
                 File.WriteAllText(temporaryPath, "drop test");
-                Control[] targets = new Control[] { _sourceTabs.TabPages[0], _dropSurface };
+                Control[] targets = new Control[] { _sourceTabs.TabPages[0], _dropSurface, _textInput };
                 foreach (Control target in targets)
                 {
                     ClearFile();
@@ -4269,7 +4363,7 @@ namespace SimulateKeyboardInput
                         System.Reflection.BindingFlags.NonPublic).Invoke(target, new object[] { drag });
                     if (_selectedPath != temporaryPath ||
                         _selectedFileName.Text != Path.GetFileName(temporaryPath) ||
-                        _selectedFileSize.Text.Length == 0 ||
+                        _selectedFileSize.Text.Length == 0 || _textInput.Text != "drop test" ||
                         _statusLabel.Text == originalStatus)
                         throw new InvalidOperationException("A dropped file did not update the selection and status.");
                 }
@@ -4291,6 +4385,21 @@ namespace SimulateKeyboardInput
                     if (drag.Effect != DragDropEffects.None || _selectedPath != temporaryPath ||
                         _selectedFileName.Text != Path.GetFileName(temporaryPath))
                         throw new InvalidOperationException("An invalid drop replaced the selected file.");
+                }
+                _textInput.Text = "pasted text";
+                if (_textInput.Text != "pasted text" || KeyboardInput.ReadText(temporaryPath) != "drop test")
+                    throw new InvalidOperationException("Editing the input must not change the selected file.");
+                ClearFile();
+                _textInput.Text = "manual text";
+                if (_selectedPath != null || _textInput.Text != "manual text")
+                    throw new InvalidOperationException("Text input must work without a selected file.");
+                string[] lineEndings = new string[] { "\r\n", "\n", "\r" };
+                foreach (string ending in lineEndings)
+                {
+                    File.WriteAllText(temporaryPath, "first" + ending + "\tsecond" + ending + "    third");
+                    SelectFile(temporaryPath);
+                    if (_textInput.Text.Replace("\r\n", "\n") != "first\n\tsecond\n    third")
+                        throw new InvalidOperationException("File line breaks and indentation must remain visible in the editor.");
                 }
             }
             finally
@@ -4408,26 +4517,11 @@ namespace SimulateKeyboardInput
                 StartManualProgram();
                 return;
             }
-            if (String.IsNullOrEmpty(_selectedPath))
-            {
-                SetStatus("\u8BF7\u5148\u9009\u62E9\u6587\u672C\u6587\u4EF6\u3002");
-                return;
-            }
-
-            string text;
-            try
-            {
-                text = KeyboardInput.ReadText(_selectedPath);
-            }
-            catch (Exception ex)
-            {
-                SetStatus("\u8BFB\u53D6\u5931\u8D25\uFF1A" + ex.Message);
-                return;
-            }
+            string text = _textInput.Text;
 
             if (text.Length == 0)
             {
-                SetStatus("\u6587\u4EF6\u5185\u5BB9\u4E3A\u7A7A\u3002");
+                SetStatus("\u8BF7\u5148\u8F93\u5165\u6587\u672C\u6216\u9009\u62E9\u6587\u4EF6\u3002");
                 return;
             }
 
