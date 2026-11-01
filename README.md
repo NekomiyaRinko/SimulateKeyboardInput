@@ -2,7 +2,7 @@
 
 Windows 键盘输入工具：把文本文件内容或手动编排的操作流程，模拟为键盘输入，发送到当前前台窗口。
 
-- 使用 Windows PowerShell 和 WinForms；无需单独安装 .NET SDK。
+- 使用 Windows PowerShell 和 WinForms。
 - 通过可配置的全局快捷键启动输入，工具不必保持在前台。
 
 ## 快速开始
